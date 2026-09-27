@@ -17,8 +17,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.x'
       - run: python3 -B -W error tests/test_core.py
@@ -47,7 +47,7 @@ jobs:
             image: archlinux:latest
             setup: pacman -Sy --noconfirm --disable-sandbox python
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       # The integration test modifies system files, so it runs in a throwaway container.
       - run: >
           docker run --rm -v "$PWD":/src:ro ${{ matrix.image }}
