@@ -176,7 +176,7 @@ def ts(value):
         v = float(value)
         if v < 315532800 or v > 4102444800:  # 1980 .. 2100
             return ''
-        return datetime.datetime.utcfromtimestamp(v).strftime('%Y-%m-%d %H:%M:%S')
+        return datetime.datetime.fromtimestamp(v, datetime.timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     except Exception:
         return ''
 
@@ -370,8 +370,10 @@ def logical(physical_path):
     if CTX.live:
         return physical_path
     r = CTX.root.rstrip('/')
-    if physical_path.startswith(r):
-        return physical_path[len(r):] or '/'
+    if physical_path == r:
+        return '/'
+    if physical_path.startswith(r + '/'):
+        return physical_path[len(r):]
     return physical_path
 
 
@@ -778,7 +780,7 @@ class PackageDB(object):
         pkgname, d, last = '', '', ''
         for line in read_lines('/lib/apk/db/installed'):
             if line.startswith('P:'):
-                pkgname = line[2:]
+                pkgname, last = line[2:], ''
                 self.installed[pkgname] = ''
             elif line.startswith('V:'):
                 self.installed[pkgname] = line[2:]
@@ -832,23 +834,35 @@ class PackageDB(object):
                 self.digests[path] = digest.lower()
                 self.digest_algo[path] = algos.get(algo, 'md5')
 
+    @staticmethod
+    def _same_file(path, alias):
+        """An alias (e.g. /bin/ls for /usr/bin/ls) only counts when it is the very same file on disk,
+        or does not exist at all (the package database lists a path that a merged-/usr symlink covers).
+        Otherwise an unpackaged /usr/sbin/x could borrow the owner of a different, packaged /usr/bin/x."""
+        a = phys(alias)
+        if not os.path.lexists(a):
+            return True
+        try:
+            return os.path.samefile(phys(path), a)
+        except OSError:
+            return False
+
     def _candidates(self, path):
         out = [path]
-        for a, b in self.ALIASES:
-            if path.startswith(a):
-                out.append(b + path[len(a):])
-            elif path.startswith(b):
-                out.append(a + path[len(b):])
-        if CTX is not None:
-            try:
-                real = _resolve_in_root(path) if not CTX.live else os.path.realpath(path)
-                if real != path:
-                    out.append(real)
-                    for a, b in self.ALIASES:
-                        if real.startswith(a):
-                            out.append(b + real[len(a):])
-            except Exception:
-                pass
+        real = path
+        try:
+            real = _resolve_in_root(path) if not CTX.live else os.path.realpath(path)
+        except Exception:
+            pass
+        if real != path:
+            out.append(real)
+        for base in (path, real):
+            for a, b in self.ALIASES:
+                for src, dst in ((a, b), (b, a)):
+                    if base.startswith(src):
+                        alias = dst + base[len(src):]
+                        if alias not in out and self._same_file(path, alias):
+                            out.append(alias)
         return out
 
     def owner(self, path):
