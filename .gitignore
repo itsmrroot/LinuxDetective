@@ -1,0 +1,13 @@
+# Python
+__pycache__/
+*.pyc
+
+# Case output contains sensitive evidence - never commit it
+Reports/
+LDCase_*/
+LDCase_*.tar.gz
+LDCase_*.tar.gz.sha256
+
+# Third-party binaries are downloaded by the user
+tools/*
+!tools/README.md
