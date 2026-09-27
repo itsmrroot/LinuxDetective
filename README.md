@@ -19,7 +19,7 @@
 [Quick start](#-quick-start) •
 [Output](#-output) •
 [What works today](#-what-works-today) •
-[Runbook](#-investigation-runbook) •
+[Runbook](docs/linux-ir-toolkit.md) •
 [Roadmap](#-roadmap) •
 [Rules](#-bring-your-own-rules)
 
@@ -37,7 +37,7 @@ Linux Detective is the Linux counterpart of [Windows Detective](https://github.c
 
 | | |
 |---|---|
-| ⚡ **Zero install** | Pure Python standard library, 3.6+. Runs from a USB stick on anything from Ubuntu 18.04 and RHEL 8 to current Arch |
+| ⚡ **Zero install** | Pure Python standard library, 3.6+. Runs from a USB stick; tested from Ubuntu 18.04 to current Arch |
 | 🔒 **Read-only** | Opens files without updating access times where the kernel allows it, and never hangs on a FIFO left in `/tmp` |
 | 📦 **Package integrity** | Finds system files that differ from what their package shipped, on **dpkg, rpm, apk and pacman**, using the package database directly |
 | 💽 **Live or dead-box** | Analyse the running host, or a disk image mounted read-only. Absolute symlinks inside the image are resolved inside the image, never on your workstation |
@@ -49,27 +49,32 @@ Linux Detective is the Linux counterpart of [Windows Detective](https://github.c
 ## 🚀 Quick start
 
 > [!TIP]
-> Copy the folder to **external media** and write the output there too. Don't install anything on the suspect machine.
+> Prepare the tool on a **clean machine**, copy it to **external media**, and write the output there too. Don't install anything on the suspect machine.
 
 ```bash
-git clone https://github.com/itsmrroot/LinuxDetective.git
-cd LinuxDetective
-./linux-detective.sh                                   # live host (asks sudo when needed)
+# On your own (clean) machine
+git clone https://github.com/itsmrroot/LinuxDetective.git /media/usb/LinuxDetective
+
+# On the machine you are investigating
+/media/usb/LinuxDetective/linux-detective.sh --output /media/usb/Reports   # asks sudo when needed
 ```
 
 **More examples**
 
 ```bash
-# Evidence-grade run: output on the USB stick, case details recorded
+# Record case details for chain of custody
 ./linux-detective.sh --output /media/usb/Reports --case-id IR-2026-042 --analyst "Jane Doe"
 
-# Dead-box: a disk or image mounted read-only (works from any Linux or macOS workstation)
+# Dead-box: a disk or image mounted read-only on your analysis workstation
 sudo mount -o ro,noexec,nodev,noload /dev/sdb1 /mnt/evidence
 ./linux-detective.sh --root /mnt/evidence --since 2026-08-01
 
 # Fast triage: binaries only, setuid sweep limited to common folders
 ./linux-detective.sh --quick
 ```
+
+> [!NOTE]
+> Dead-box analysis runs on any system that can mount the evidence filesystem, including macOS with an ext4 driver. Images of **RHEL-family** systems also need the `rpm` command on the analysis machine.
 
 The launcher finds a suitable Python 3 (including RHEL's `platform-python`) and re-runs itself with `sudo`. You can also call `python3 -B linux_detective.py` directly.
 
@@ -113,7 +118,8 @@ Reports/
     ├── collection.log                  what ran, when, and any errors
     ├── collection_stats.csv            duration and result of each check
     ├── manifest.sha256.csv             SHA-256 of every file (written last - chain of custody)
-    └── raw/                            ModifiedPackageFiles, UnownedSystemFiles, SetuidSetgidFiles (CSV)
+    ├── raw/                            ModifiedPackageFiles, UnownedSystemFiles, SetuidSetgidFiles (CSV)
+    └── files/                          evidence copies (reserved for upcoming checks)
 ```
 
 ---
@@ -164,7 +170,7 @@ The whole filesystem is swept for setuid / setgid files. Pseudo filesystems, con
 - **Artifacts** saved as CSV for your own analysis.
 - **Allowlist** (`hash:`, `path:`, `text:` rules with a reason). Matching findings stay visible as *Info*.
 - **Self-exclusion**: the tool ignores its own folder and case folders. Merely *mentioning* its name hides nothing.
-- **Evidence helpers**: MD5 / SHA-1 / SHA-256 in one pass, file metadata, recovery copies stored as `<sha256>.bin`.
+- **Evidence helpers**: MD5 / SHA-1 / SHA-256 in one pass, file metadata, and evidence copies stored as `<sha256>.bin` (ready for upcoming checks).
 - **Safe command runner**: trusted binary paths only, clean environment, timeouts.
 </details>
 
@@ -192,7 +198,7 @@ Every push runs on GitHub Actions: the self-tests on Linux and macOS, plus a **l
 | Alpine 3.20 | 3.12 | apk | ✅ | ✅ |
 | Arch Linux | 3.14 | pacman | ✅ | ✅ |
 
-On a clean Rocky Linux 9 system the scan reports **zero findings**.
+A scan of a clean Rocky Linux 9 container reports **zero findings**.
 
 ```bash
 python3 -B tests/test_core.py && python3 -B tests/test_scan.py    # safe anywhere, never touches the host
@@ -200,7 +206,7 @@ python3 -B tests/test_core.py && python3 -B tests/test_scan.py    # safe anywher
 
 ---
 
-## 🗺️ Roadmap
+## 🧭 Roadmap
 
 - [x] Forensic engine (findings, timeline, allowlist, live and image mode)
 - [x] Package integrity for dpkg, rpm, apk and pacman
