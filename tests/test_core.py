@@ -11,11 +11,9 @@ import io
 import json
 import os
 import shutil
-import stat
 import sys
 import tempfile
 import threading
-import time
 import unittest
 
 sys.dont_write_bytecode = True
@@ -226,6 +224,27 @@ class PackageDatabase(ImageTestCase):
         self.assertEqual(p.owner('/lib/ld-musl.so.1'), 'musl')
         self.assertEqual(p.verify('/usr/bin/ls'), 'ok')
         self.assertEqual(p.verify('/usr/bin/other'), '')  # the digest of ls must not stick to the next file
+
+    def test_pacman(self):
+        shutil.rmtree(os.path.join(self.root, 'var/lib/dpkg'))
+        write(self.root, '/var/lib/pacman/local/ALPM_DB_VERSION', '9\n')
+        write(self.root, '/var/lib/pacman/local/coreutils-9.5-1/files', '%FILES%\nusr/\nusr/bin/\nusr/bin/ls\n\n%BACKUP%\n')
+        write(self.root, '/var/lib/pacman/local/python-pip-24.0-2/files', '%FILES%\nusr/bin/pip\n')
+        import gzip
+        mtree = '#mtree\n/set type=file uid=0 gid=0 mode=644\n./usr/bin/ls time=1.0 mode=755 size=15 sha256digest=%s\n' % \
+            hashlib.sha256(b'\x7fELF-genuine-ls').hexdigest()
+        write(self.root, '/var/lib/pacman/local/coreutils-9.5-1/mtree', gzip.compress(mtree.encode()))
+        core.CTX.pkg = None
+        p = core.pkg()
+        self.assertEqual(p.kind, 'pacman')
+        self.assertEqual(p.owner('/usr/bin/ls'), 'coreutils')
+        self.assertEqual(p.owner('/bin/ls'), 'coreutils')
+        self.assertEqual(p.owner('/usr/bin/pip'), 'python-pip')
+        self.assertEqual(p.installed.get('python-pip'), '24.0-2')
+        self.assertNotIn('ALPM_DB_VERSION', p.installed)
+        self.assertEqual(p.verify('/usr/bin/ls'), 'ok')
+        write(self.root, '/usr/bin/ls', b'\x7fELF-modified')
+        self.assertEqual(p.verify('/usr/bin/ls'), 'modified')
 
     def test_no_database(self):
         shutil.rmtree(os.path.join(self.root, 'var/lib/dpkg'))

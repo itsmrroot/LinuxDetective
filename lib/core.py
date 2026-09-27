@@ -800,6 +800,8 @@ class PackageDB(object):
     def _load_pacman(self):
         base = '/var/lib/pacman/local'
         for d in listdir(base):
+            if not isdir(base + '/' + d):  # e.g. the ALPM_DB_VERSION file
+                continue
             parts = d.rsplit('-', 2)
             pkgname = parts[0] if len(parts) == 3 else d
             self.installed[pkgname] = '-'.join(parts[1:])
@@ -810,6 +812,23 @@ class PackageDB(object):
                     continue
                 if in_files and line and not line.endswith('/'):
                     self.owners.setdefault('/' + line, pkgname)
+            # Shipped SHA-256 digests live in the gzip-compressed mtree file
+            data = read_bytes(base + '/' + d + '/mtree', 64 * 1024 * 1024)
+            if data and data[:2] == b'\x1f\x8b':
+                import gzip
+                try:
+                    text = gzip.decompress(data).decode('utf-8', 'replace')
+                except Exception:
+                    text = ''
+                for line in text.splitlines():
+                    if not line.startswith('./') or 'sha256digest=' not in line:
+                        continue
+                    fields = line.split(' ')
+                    path = '/' + fields[0][2:].replace('\\040', ' ')
+                    for f in fields[1:]:
+                        if f.startswith('sha256digest='):
+                            self.digests[path] = f.split('=', 1)[1].lower()
+                            self.digest_algo[path] = 'sha256'
 
     def _load_rpm(self):
         args = ['rpm']
