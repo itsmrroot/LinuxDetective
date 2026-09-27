@@ -1,0 +1,16 @@
+# Linux Detective - allowlist (known-good activity)
+# Powered by Bashar Salmo
+#
+# Findings that match a rule here are NOT hidden: they stay in the output as Info,
+# tagged "allowlisted", with their original severity - so nothing is silently lost.
+#
+# One rule per line, optionally followed by " | reason":
+#   hash:<md5|sha1|sha256>        exact file hash                      (most precise)
+#   path:<wildcard>               file path, * and ? allowed           (precise)
+#   text:<wildcard>               any text in the finding's evidence   (broadest)
+#
+# Prefer hash: and path: rules. Only allowlist what you have verified on THIS environment.
+#
+# Examples (remove the leading # to enable):
+# path:/usr/sbin/policy-rc.d | added by our container base image
+# hash:0000000000000000000000000000000000000000000000000000000000000000 | in-house agent v2.1

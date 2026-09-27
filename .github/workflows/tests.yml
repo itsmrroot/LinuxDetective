@@ -1,0 +1,54 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    name: Self-tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - run: python3 -B -W error tests/test_core.py
+      - run: python3 -B -W error tests/test_scan.py
+
+  distros:
+    name: Live scan (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 18.04 / Python 3.6
+            image: ubuntu:18.04
+            setup: apt-get update && apt-get install -y python3
+          - name: Ubuntu 24.04
+            image: ubuntu:24.04
+            setup: apt-get update && apt-get install -y python3
+          - name: Rocky Linux 9
+            image: rockylinux/rockylinux:9
+            setup: dnf install -y python3
+          - name: Alpine 3.20
+            image: alpine:3.20
+            setup: apk add python3
+          - name: Arch Linux
+            image: archlinux:latest
+            setup: pacman -Sy --noconfirm --disable-sandbox python
+    steps:
+      - uses: actions/checkout@v4
+      # The integration test modifies system files, so it runs in a throwaway container.
+      - run: >
+          docker run --rm -v "$PWD":/src:ro ${{ matrix.image }}
+          sh -c '${{ matrix.setup }} >/tmp/setup.log 2>&1 || { tail -20 /tmp/setup.log; exit 1; }; sh /src/tests/integration.sh'

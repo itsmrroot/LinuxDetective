@@ -4,8 +4,8 @@
 #  LD-SELF-MARKER
 #
 #  Command-line rules are data, not code: add them to rules/detection-data.json
-#  (or pass --rules <file>) and they are applied to every shell history line,
-#  cron entry, systemd Exec line and process command line the tool collects.
+#  (or pass --rules <file>). They are loaded and validated on every run, and
+#  check_command() applies them to any command line a check passes in.
 # =============================================================================
 
 import io
