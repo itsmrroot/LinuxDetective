@@ -8,6 +8,7 @@
 
 [![Python](https://img.shields.io/badge/Python-3.6%2B-3776AB?logo=python&logoColor=white)](#-quick-start)
 [![Dependencies](https://img.shields.io/badge/dependencies-none-2EA043)](#-quick-start)
+[![tests](https://github.com/itsmrroot/LinuxDetective/actions/workflows/tests.yml/badge.svg)](https://github.com/itsmrroot/LinuxDetective/actions/workflows/tests.yml)
 [![Distros](https://img.shields.io/badge/tested-Ubuntu%20%7C%20Rocky%20%7C%20Alpine%20%7C%20Arch-E95420?logo=linux&logoColor=white)](#-tested-on)
 [![Host impact](https://img.shields.io/badge/host%20impact-read--only-2EA043)](#-forensic-principles)
 [![Status](https://img.shields.io/badge/status-early%20development-orange)](#-roadmap)
@@ -16,6 +17,7 @@
 *A Linux server may have been hacked. Linux Detective helps you find out, without destroying the evidence.*
 
 [Quick start](#-quick-start) •
+[Output](#-output) •
 [What works today](#-what-works-today) •
 [Runbook](#-investigation-runbook) •
 [Roadmap](#-roadmap) •
@@ -26,8 +28,8 @@
 ---
 
 > [!NOTE]
-> **Early development.** The forensic engine, package-integrity verification and the investigation runbook are finished and tested.
-> The full one-command scanner and HTML report are on the [roadmap](#-roadmap). Until then, the [runbook](docs/linux-ir-toolkit.md) shows how to investigate a host today with proven open-source tools.
+> **Early development.** Today Linux Detective checks **package integrity** and **setuid / setgid files** and produces a sealed case folder.
+> More checks and the HTML report are on the [roadmap](#-roadmap). For a full investigation today, combine it with the proven open-source tools in the [runbook](docs/linux-ir-toolkit.md).
 
 Linux Detective is the Linux counterpart of [Windows Detective](https://github.com/itsmrroot/WindowsDetective).
 
@@ -46,42 +48,73 @@ Linux Detective is the Linux counterpart of [Windows Detective](https://github.c
 
 ## 🚀 Quick start
 
+> [!TIP]
+> Copy the folder to **external media** and write the output there too. Don't install anything on the suspect machine.
+
 ```bash
 git clone https://github.com/itsmrroot/LinuxDetective.git
 cd LinuxDetective
-python3 -B tests/test_core.py        # 25 self-tests, never touches the host
+./linux-detective.sh                                   # live host (asks sudo when needed)
 ```
 
-**Find system binaries that no longer match their package:**
+**More examples**
 
 ```bash
-sudo python3 -B - <<'EOF'
-import os, sys
-sys.path.insert(0, '.')
-from lib import core
-core.new_context({'root': '/', 'tool_root': '.'})
-db = core.pkg()
-print('package database:', db.kind or 'none')
-for d in ('/usr/bin', '/usr/sbin'):
-    for name in sorted(os.listdir(d)):
-        p = os.path.join(d, name)
-        if os.path.isfile(p) and not os.path.islink(p):
-            state = db.verify(p)
-            owner = db.owner(p)
-            if state == 'modified' or not owner:
-                print('%-9s %-40s %s' % (state or 'unowned', p, owner))
-EOF
-```
+# Evidence-grade run: output on the USB stick, case details recorded
+./linux-detective.sh --output /media/usb/Reports --case-id IR-2026-042 --analyst "Jane Doe"
 
-To check a **disk image** instead of the running system, mount it read-only and pass the mount point as `root`:
-
-```bash
+# Dead-box: a disk or image mounted read-only (works from any Linux or macOS workstation)
 sudo mount -o ro,noexec,nodev,noload /dev/sdb1 /mnt/evidence
-# ...then use {'root': '/mnt/evidence', ...} in new_context()
+./linux-detective.sh --root /mnt/evidence --since 2026-08-01
+
+# Fast triage: binaries only, setuid sweep limited to common folders
+./linux-detective.sh --quick
 ```
 
-> [!TIP]
-> Run from **external media** and write any output there too. Don't install anything on the suspect machine.
+The launcher finds a suitable Python 3 (including RHEL's `platform-python`) and re-runs itself with `sudo`. You can also call `python3 -B linux_detective.py` directly.
+
+<details>
+<summary><b>⚙️ All options</b></summary>
+
+| Option | Purpose |
+|---|---|
+| `--root <dir>` | Analyse a filesystem mounted at `<dir>` instead of the live host |
+| `--output <dir>` | Where case folders and `scan_history.csv` go (default: `Reports/` next to the tool) |
+| `--days <n>` / `--since YYYY-MM-DD` | Investigation window (default 30 days). Use `--since` for old images |
+| `--case-id`, `--analyst` | Recorded in the output for chain of custody |
+| `--quick` | Binaries only; setuid sweep limited to common folders |
+| `--max-files <n>` | Upper bound of files the setuid sweep visits (default 3,000,000) |
+| `--allowlist <file>` | Known-good rules (default `iocs/allowlist.txt`) |
+| `--rules <file>` | Extra command-rule file |
+| `--no-archive` | Skip the `.tar.gz` archive |
+
+</details>
+
+---
+
+## 📊 Output
+
+| Verdict | Trigger |
+|---|---|
+| 🔴 **COMPROMISED** | Any Critical finding |
+| 🟠 **HIGHLY SUSPICIOUS** | 3 or more High findings |
+| 🟠 **SUSPICIOUS** | Any High finding |
+| 🟡 **NEEDS REVIEW** | 5 or more Medium findings |
+| 🟢 **NO STRONG INDICATORS** | Anything else |
+
+```text
+Reports/
+├── scan_history.csv                    one line per scan: time, host, verdict, risk score, counts
+├── LDCase_<host>_<timestamp>.tar.gz    (+ .sha256) archive of the case folder
+└── LDCase_<host>_<timestamp>/          (mode 700 - may contain sensitive data)
+    ├── findings.json / findings.csv    every finding with severity, evidence and ATT&CK id
+    ├── timeline.csv                    UTC timeline
+    ├── system_info.json                host profile, verdict and risk score
+    ├── collection.log                  what ran, when, and any errors
+    ├── collection_stats.csv            duration and result of each check
+    ├── manifest.sha256.csv             SHA-256 of every file (written last - chain of custody)
+    └── raw/                            ModifiedPackageFiles, UnownedSystemFiles, SetuidSetgidFiles (CSV)
+```
 
 ---
 
@@ -89,6 +122,15 @@ sudo mount -o ro,noexec,nodev,noload /dev/sdb1 /mnt/evidence
 
 <details open>
 <summary><b>📦 Package integrity</b></summary>
+
+Every executable in `/usr/bin`, `/usr/sbin`, `/bin` and `/sbin`, and every shared library in the system library folders, is checked against the package database:
+
+| Finding | Severity |
+|---|---|
+| Packaged system file has been modified | High |
+| Executable / shared library in a system directory not owned by any package | Medium, **High** when created or changed within the window |
+| System command is a symlink into a temporary or hidden location | High |
+| System file replaced through a local `dpkg-divert` | Low |
 
 | Distro family | Database | Ownership | Verification |
 |---|---|---|---|
@@ -98,7 +140,20 @@ sudo mount -o ro,noexec,nodev,noload /dev/sdb1 /mnt/evidence
 | Arch, Manjaro | pacman | `local/*/files` | shipped SHA-256 (`mtree`) |
 
 - Works on merged-`/usr` systems (`/bin` → `/usr/bin`). An unpackaged file can never borrow the owner of a *different* packaged file with the same name.
+- Understands `dpkg-divert`, so deliberately replaced files are explained instead of reported as unknown.
 - "Unknown" is never reported as "unowned". Without a readable package database, the ownership checks switch off.
+</details>
+
+<details open>
+<summary><b>🔐 Setuid / setgid inventory</b></summary>
+
+The whole filesystem is swept for setuid / setgid files. Pseudo filesystems, container storage and network shares (NFS, SMB, SSHFS) are skipped. Every file is listed with its package and verification state:
+
+| Finding | Severity |
+|---|---|
+| Setuid / setgid file differs from its package | Critical |
+| Setuid / setgid file not owned by any package | High (Medium under `/opt` or `/usr/local`) |
+| Setuid / setgid file writable by every user | High |
 </details>
 
 <details>
@@ -127,17 +182,21 @@ sudo mount -o ro,noexec,nodev,noload /dev/sdb1 /mnt/evidence
 
 ## 🧪 Tested on
 
-Every change runs the self-test suite and a live check against the distro's real package database (including catching a deliberately modified binary):
+Every push runs on GitHub Actions: the self-tests on Linux and macOS, plus a **live scan on five distros**. Each distro gets a planted modified binary, an unpackaged program and an unpackaged setuid file, and the scan must report all three with a valid manifest:
 
-| Distro | Python | Package DB | Self-tests | Tampered binary caught |
+| Distro | Python | Package DB | Self-tests | Live scan catches all three |
 |---|---|---|---|---|
-| Ubuntu 18.04 | 3.6.9 | dpkg | ✅ | ✅ |
+| Ubuntu 18.04 | 3.6 | dpkg | ✅ | ✅ |
 | Ubuntu 24.04 | 3.12 | dpkg | ✅ | ✅ |
 | Rocky Linux 9 | 3.9 | rpm | ✅ | ✅ |
 | Alpine 3.20 | 3.12 | apk | ✅ | ✅ |
 | Arch Linux | 3.14 | pacman | ✅ | ✅ |
 
-The self-tests also pass on macOS, where image mode lets you analyse a mounted Linux disk.
+On a clean Rocky Linux 9 system the scan reports **zero findings**.
+
+```bash
+python3 -B tests/test_core.py && python3 -B tests/test_scan.py    # safe anywhere, never touches the host
+```
 
 ---
 
@@ -146,13 +205,16 @@ The self-tests also pass on macOS, where image mode lets you analyse a mounted L
 - [x] Forensic engine (findings, timeline, allowlist, live and image mode)
 - [x] Package integrity for dpkg, rpm, apk and pacman
 - [x] Investigation runbook
-- [ ] Case folder with SHA-256 manifest, hashed `.tar.gz` archive and scan history
-- [ ] Integrity sweep of system directories, with setuid / setgid inventory
+- [x] Case folder with SHA-256 manifest, hashed `.tar.gz` archive and scan history
+- [x] Integrity sweep of system directories, with setuid / setgid inventory
+- [x] One-command launcher
+- [x] Automated tests on five distros (GitHub Actions)
 - [ ] IOC matching (hashes, IPs, domains) and YARA scanning
 - [ ] Run UAC, chkrootkit and rkhunter automatically and import their results
 - [ ] Filesystem timeline (Sleuth Kit bodyfile) and optional AVML memory capture
-- [ ] Interactive HTML report (light & dark), JSON and CSV output
-- [ ] One-command launcher
+- [ ] Interactive HTML report (light & dark)
+- [ ] Changed configuration files in `/etc` (dpkg conffile digests)
+- [ ] Read the rpm database directly, so RHEL images can be analysed without `rpm` installed
 
 ---
 
@@ -176,6 +238,7 @@ Command-line rules are data, not code. Put them in `rules/detection-data.json`, 
 
 - **Fields:** `severity` is one of `Critical`, `High`, `Medium`, `Low` or `Info`.
 - **Bad patterns:** a pattern that doesn't compile is reported and skipped; the rest still load.
+- **Current status:** rules are loaded and validated on every run, but none of today's checks passes command lines to them yet. The rule engine is ready for the checks that will.
 - **Sources:** good places to start are the Linux rules of the [Sigma](https://github.com/SigmaHQ/sigma) project and your own incident tickets.
 
 ---
@@ -197,13 +260,22 @@ Command-line rules are data, not code. Put them in `rules/detection-data.json`, 
 <summary><b>🗂️ Project layout</b></summary>
 
 ```text
+linux_detective.py       entry point / orchestration
+linux-detective.sh       launcher (finds Python 3, asks sudo)
 lib/
-├── core.py      engine: context, findings, timeline, allowlist, file / image / package helpers
-└── rules.py     loads and applies user-supplied command rules
-docs/
-└── linux-ir-toolkit.md   investigation runbook
+├── core.py              engine: context, findings, timeline, allowlist, file / image / package helpers
+├── system.py            host profile
+├── integrity.py         package integrity sweep, setuid / setgid inventory
+├── report.py            verdict, findings / timeline JSON and CSV
+├── case.py              case folder, SHA-256 manifest, archive, scan history
+└── rules.py             loads and applies user-supplied command rules
+rules/detection-data.json   command rules (yours to fill)
+iocs/allowlist.txt          known-good rules
+docs/linux-ir-toolkit.md    investigation runbook
 tests/
-└── test_core.py          self-test suite (stdlib unittest)
+├── test_core.py         engine self-tests
+├── test_scan.py         end-to-end scan of a fake image
+└── integration.sh       live scan with planted problems (throwaway containers only)
 ```
 
 </details>

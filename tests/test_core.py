@@ -14,6 +14,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import unittest
 
 sys.dont_write_bytecode = True
@@ -146,6 +147,16 @@ class ImagePaths(ImageTestCase):
         # A sibling folder that merely starts with the same name is not inside the image
         self.assertEqual(core.logical(self.root + '2/etc/passwd'), self.root + '2/etc/passwd')
 
+    def test_lstat_does_not_follow_last_symlink(self):
+        os.symlink('/tmp/.x/payload', os.path.join(self.root, 'usr/bin/dangling'))
+        st = core.lstat('/usr/bin/dangling')
+        self.assertIsNotNone(st)
+        import stat as st_mod
+        self.assertTrue(st_mod.S_ISLNK(st.st_mode))
+        self.assertTrue(core.exists('/usr/bin/dangling'))
+        self.assertTrue(core.exists('/bin/dangling'))  # parent symlink (/bin -> usr/bin) is still resolved
+        self.assertEqual(os.readlink(core.phys_nofollow('/bin/dangling')), '/tmp/.x/payload')
+
     def test_dotdot_cannot_escape(self):
         self.assertTrue(core.phys('/../../../etc/passwd').startswith(self.root))
 
@@ -209,6 +220,44 @@ class PackageDatabase(ImageTestCase):
         write(self.root, '/usr/bin/ls', b'\x7fELF-modified')
         self.assertEqual(p.verify('/usr/bin/ls'), 'modified')
         self.assertEqual(p.verify('/usr/bin/tool'), '')  # no digest shipped
+
+    def test_verify_cache_notices_changes(self):
+        p = core.pkg()
+        self.assertEqual(p.verify('/usr/bin/ls'), 'ok')
+        self.assertEqual(p.verify('/usr/bin/ls'), 'ok')  # served from cache
+        time.sleep(0.01)
+        write(self.root, '/usr/bin/ls', b'\x7fELF-modified!')  # different size and mtime
+        self.assertEqual(p.verify('/usr/bin/ls'), 'modified')
+
+    def test_dpkg_diversions(self):
+        r = self.root
+        # A local diversion (like Ubuntu's container "man" stub) and a package diversion
+        write(r, '/usr/bin/man', b'#!/bin/sh\necho stub\n')
+        write(r, '/usr/bin/man.REAL', b'real man')
+        write(r, '/usr/bin/fmt', b'fmt from wrapper')
+        write(r, '/usr/bin/fmt.distrib', b'fmt from coreutils')
+        write(r, '/var/lib/dpkg/diversions',
+              '/usr/bin/man\n/usr/bin/man.REAL\n:\n/usr/bin/fmt\n/usr/bin/fmt.distrib\nwrapper\n')
+        write(r, '/var/lib/dpkg/info/man-db.list', '/usr/bin/man\n')
+        write(r, '/var/lib/dpkg/info/man-db.md5sums', hashlib.md5(b'real man').hexdigest() + '  usr/bin/man\n')
+        write(r, '/var/lib/dpkg/info/coreutils.list', '/.\n/bin\n/bin/ls\n/usr/bin/fmt\n')
+        write(r, '/var/lib/dpkg/info/coreutils.md5sums', hashlib.md5(b'\x7fELF-genuine-ls').hexdigest() + '  bin/ls\n' +
+              hashlib.md5(b'fmt from coreutils').hexdigest() + '  usr/bin/fmt\n')
+        write(r, '/var/lib/dpkg/info/wrapper.list', '/usr/bin/fmt\n')
+        write(r, '/var/lib/dpkg/info/wrapper.md5sums', hashlib.md5(b'fmt from wrapper').hexdigest() + '  usr/bin/fmt\n')
+        core.CTX.pkg = None
+        p = core.pkg()
+        self.assertEqual(p.owner('/usr/bin/man'), '')           # local stub: really unpackaged
+        self.assertIn('local diversion', p.diversion('/usr/bin/man'))
+        self.assertEqual(p.owner('/usr/bin/man.REAL'), 'man-db')
+        self.assertEqual(p.verify('/usr/bin/man.REAL'), 'ok')
+        self.assertEqual(p.verify('/usr/bin/man'), '')          # no digest for a local stub
+        self.assertEqual(p.owner('/usr/bin/fmt'), 'wrapper')
+        self.assertEqual(p.verify('/usr/bin/fmt'), 'ok')
+        self.assertEqual(p.owner('/usr/bin/fmt.distrib'), 'coreutils')
+        self.assertEqual(p.verify('/usr/bin/fmt.distrib'), 'ok')
+        write(r, '/usr/bin/fmt.distrib', b'tampered')
+        self.assertEqual(p.verify('/usr/bin/fmt.distrib'), 'modified')
 
     def test_apk(self):
         shutil.rmtree(os.path.join(self.root, 'var/lib/dpkg'))

@@ -1,0 +1,4 @@
+{
+  "_comment": "Linux Detective command rules - Powered by Bashar Salmo. Add rules to commandRules: id, severity (Critical|High|Medium|Low|Info), mitre (optional, comma separated), title, pattern (case-insensitive regular expression). A pattern that does not compile is reported and skipped.",
+  "commandRules": []
+}
