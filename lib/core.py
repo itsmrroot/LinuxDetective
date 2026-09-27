@@ -377,8 +377,18 @@ def logical(physical_path):
     return physical_path
 
 
+def phys_nofollow(path):
+    """Like phys(), but the last component is not resolved: a symlink stays a symlink (lstat / readlink)."""
+    if CTX.live:
+        return path
+    parent, name = posixpath.split(posixpath.normpath('/' + path.lstrip('/')))
+    if not name:
+        return CTX.root.rstrip('/') or '/'
+    return phys(parent).rstrip('/') + '/' + name
+
+
 def exists(path):
-    return os.path.lexists(phys(path))
+    return os.path.lexists(phys_nofollow(path))
 
 
 def isdir(path):
@@ -394,7 +404,7 @@ def listdir(path):
 
 def lstat(path):
     try:
-        return os.lstat(phys(path))
+        return os.lstat(phys_nofollow(path))
     except OSError:
         return None
 
@@ -622,15 +632,27 @@ def load_users():
     return users
 
 
+_UID_NAMES = {}
+
+
+def _uid_map():
+    users = load_users()
+    key = id(users)
+    if _UID_NAMES.get('key') != key:
+        _UID_NAMES.clear()
+        _UID_NAMES['key'] = key
+        _UID_NAMES['map'] = {}
+        for u in users:
+            _UID_NAMES['map'].setdefault(u['uid'], u['name'])  # first entry wins, like getpwuid
+    return _UID_NAMES['map']
+
+
 def user_name(uid):
-    for u in load_users():
-        if u['uid'] == uid:
-            return u['name']
-    return str(uid)
+    return _uid_map().get(uid, str(uid))
 
 
 def uid_known(uid):
-    return any(u['uid'] == uid for u in load_users())
+    return uid in _uid_map()
 
 
 NOLOGIN_RX = re.compile(r'(nologin|/false|/sync|/shutdown|/halt)$')
@@ -721,6 +743,12 @@ class PackageDB(object):
         self.digest_algo = {}
         self.installed = {}
         self.error = ''
+        self._verified = {}
+        # dpkg-divert: original path -> (diverted-to path, diverting package or ':' for a local diversion)
+        self.div_from = {}
+        self.div_to = {}
+        self.div_owners = {}
+        self.pkg_digests = {}
 
     def detect(self):
         if isdir('/var/lib/dpkg/info'):
@@ -753,6 +781,11 @@ class PackageDB(object):
 
     def _load_dpkg(self):
         info = '/var/lib/dpkg/info'
+        # Diversions come in blocks of three lines: original path, diverted-to path, package (':' = local)
+        div = read_lines('/var/lib/dpkg/diversions')
+        for i in range(0, len(div) - 2, 3):
+            self.div_from[div[i]] = (div[i + 1], div[i + 2])
+            self.div_to[div[i + 1]] = div[i]
         for f in listdir(info):
             if f.endswith('.list'):
                 pkgname = f[:-5].split(':')[0]
@@ -760,14 +793,20 @@ class PackageDB(object):
                 for line in read_lines(info + '/' + f, 32 * 1024 * 1024):
                     if line and line != '/.':
                         self.owners.setdefault(line, pkgname)
+                        if line in self.div_from:
+                            self.div_owners.setdefault(line, []).append(pkgname)
         # Shipped MD5 digests (package verification without running dpkg)
         for f in listdir(info):
             if f.endswith('.md5sums'):
+                pkgname = f[:-8].split(':')[0]
                 for line in read_lines(info + '/' + f, 32 * 1024 * 1024):
                     parts = line.split(None, 1)
                     if len(parts) == 2 and len(parts[0]) == 32:
-                        self.digests['/' + parts[1].lstrip('/')] = parts[0].lower()
-                        self.digest_algo['/' + parts[1].lstrip('/')] = 'md5'
+                        p = '/' + parts[1].lstrip('/')
+                        self.digests[p] = parts[0].lower()
+                        self.digest_algo[p] = 'md5'
+                        if p in self.div_from:
+                            self.pkg_digests[(pkgname, p)] = parts[0].lower()
         status = read_text('/var/lib/dpkg/status') or ''
         for block in status.split('\n\n'):
             m = re.search(r'^Package: (\S+)', block, re.M)
@@ -889,16 +928,70 @@ class PackageDB(object):
             return ''
         self._load()
         for c in self._candidates(path):
+            if c in self.div_from:  # the file here now comes from the diverting package (or the admin)
+                by = self.div_from[c][1]
+                return '' if by == ':' else by
+            if c in self.div_to:  # the displaced original still belongs to its package
+                orig = self.div_to[c]
+                by = self.div_from[orig][1]
+                for o in self.div_owners.get(orig, []):
+                    if o != by:
+                        return o
+                continue
             o = self.owners.get(c)
             if o:
                 return o
         return ''
 
-    def verify(self, path):
-        """'ok', 'modified' or '' (unknown) - compares the file with the digest its package shipped."""
+    def diversion(self, path):
+        """Explains a dpkg-divert entry covering this path, or ''."""
         self._load()
         for c in self._candidates(path):
-            want = self.digests.get(c)
+            if c in self.div_from:
+                to, by = self.div_from[c]
+                who = 'a local diversion (dpkg-divert --local)' if by == ':' else 'package ' + by
+                return 'diverted by %s; the packaged original was moved to %s' % (who, to)
+            if c in self.div_to:
+                return 'packaged original of %s, moved here by dpkg-divert' % self.div_to[c]
+        return ''
+
+    def _want_digest(self, c):
+        if c in self.div_from:
+            by = self.div_from[c][1]
+            return self.pkg_digests.get((by, c)) if by != ':' else None
+        if c in self.div_to:
+            orig = self.div_to[c]
+            by = self.div_from[orig][1]
+            for o in self.div_owners.get(orig, []):
+                if o != by and (o, orig) in self.pkg_digests:
+                    return self.pkg_digests[(o, orig)]
+            return None
+        return self.digests.get(c)
+
+    def verify(self, path):
+        """'ok', 'modified' or '' (unknown) - compares the file with the digest its package shipped.
+        Cached per (path, size, mtime, ctime) so a file that changes during the run is hashed again."""
+        self._load()
+        try:
+            st = os.stat(phys(path))  # the file that gets hashed (symlinks followed)
+            key = (path, st.st_size, st.st_mtime, st.st_ctime)
+        except OSError:
+            key = None
+        if key is not None and key in self._verified:
+            return self._verified[key]
+        result = self._verify(path)
+        if key is not None:
+            self._verified[key] = result
+        return result
+
+    def _verify(self, path):
+        for c in self._candidates(path):
+            if c in self.div_from or c in self.div_to:
+                want = self._want_digest(c)
+                if not want:
+                    return ''
+            else:
+                want = self.digests.get(c)
             if not want:
                 continue
             algo = self.digest_algo.get(c, 'md5')
